@@ -361,7 +361,27 @@
       const B = (x, w, h) => mk("B", { x, y: 0, w, h, sx: x, sy: 0, sw: w, sh: h });
       const K = (x, y, w) => mk("K", { x, y, w, lx: x, ly: y, lw: w, lh: H - y });
       const C = (x, y, w, m, d, link, id) =>
-        mk("C", { x, y, w, m, d, link, id, sx: x, sy: y, sw: w, sh: 16, vy: 0 });
+        mk("C", {
+          x,
+          y,
+          w,
+          m,
+          d,
+          link,
+          id,
+          sx: x,
+          sy: y,
+          sw: w,
+          sh: 16,
+          vy: 0,
+          mo: 0,
+          ms: 0,
+          dir: 1,
+          dist: 0,
+          sl: 0,
+          rs: 1,
+          lead: 30,
+        });
       const G = (x, y, w, m, o) => mk("G", { x, y, w, m, rad: 70, dur: 60, per: 150, ...o });
       const S = (x, y, w, m, o) =>
         mk("S", { x, y, w, m, rad: 60, sp: 5, max: 150, dur: 60, per: 180, d: 15, ...o });
@@ -419,11 +439,50 @@
       }
       const near = (o) => Math.abs(pl.x + 7 - (o.x + o.w / 2));
 
+      // Each panel/pit owns its own random stream, so no two behave in sync.
+      function nextRand(o) {
+        o.rs = (Math.imul(o.rs, 1664525) + 1013904223) >>> 0;
+        return o.rs / 4294967296;
+      }
       const U = {
         C(o) {
           if (o.st === 0) {
             if (pl.stand === o && o.m !== "safe" && o.m !== "take") trig(o, o.d);
             if (o.m === "take" && pl.j && pl.ls === o) trig(o, 3);
+            // Surprise pit: opens a few steps before the edge, with no warning shake.
+            if (o.m === "pit" && pl.stand && pl.x + 7 > o.x - o.lead)
+              trig(o, 2 + ((nextRand(o) * 4) | 0));
+          }
+          // Sliding panel: may shift sideways when the player jumps toward it, then returns.
+          if (o.sl && o.st === 0) {
+            const prev = o.mo;
+            if (o.ms === 0) {
+              if (
+                pl.j &&
+                pl.stand !== o &&
+                Math.abs(pl.x + 7 - (o.x + o.mo + o.w / 2)) < 170 &&
+                nextRand(o) < 0.6
+              ) {
+                o.ms = 1;
+                o.dir = nextRand(o) < 0.5 ? -1 : 1;
+                o.dist = 30 + nextRand(o) * 15;
+              }
+            } else if (o.ms === 1) {
+              o.mo += o.dir * 2.2;
+              if (Math.abs(o.mo) >= o.dist) {
+                o.ms = 2;
+                o.tm = (45 + nextRand(o) * 25) | 0;
+              }
+            } else if (o.ms === 2) {
+              if (--o.tm <= 0) o.ms = 3;
+            } else {
+              o.mo -= Math.sign(o.mo) * 1.5;
+              if (Math.abs(o.mo) < 1.5) {
+                o.mo = 0;
+                o.ms = 0;
+              }
+            }
+            if (pl.stand === o) pl.x += o.mo - prev; // panel carries the player
           }
           if (o.ad > 0 && --o.ad === 0) {
             colTick = tick;
@@ -433,6 +492,10 @@
               o.sx = o.x + o.w / 2;
               o.sw = o.w / 2;
               o.st = 4;
+            } else if (o.m === "pit") {
+              o.sw = 0;
+              o.st = 3;
+              o.cd = 1e9;
             } else {
               o.st = 2;
               o.vy = 0;
@@ -453,6 +516,7 @@
             o.sw = o.w;
             o.sx = o.x;
           }
+          if (o.st !== 4) o.sx = o.x + o.mo;
         },
         G(o) {
           if (o.st === 0) {
@@ -653,17 +717,28 @@
           wl: "#a0623a",
           fl: "#c98a52",
           ce: 60,
-          mk: (R) => [
-            F(0, 440, 150),
-            K(150, 500, 490),
-            C(210, 400, 50, "land", R(10, 22)),
-            C(330, 350, 50, "delay", R(35, 60)),
-            C(450, 300, 50, "safe", 0),
-            C(570, 350, 50, "take", 0),
-            F(640, 330, 320),
-            S(700, 60, 60, "prox", { d: R(20, 35), max: 180 }),
-            D("d", 780, 330, { hold: R(60, 90) }),
-          ],
+          mk: (R) => {
+            const SL = (o) => {
+              o.sl = 1;
+              o.rs = R(1, 1e9) | 0;
+              return o;
+            };
+            const pit = C(110, 440, 50, "pit", 0);
+            pit.rs = R(1, 1e9) | 0;
+            return [
+              K(110, 500, 530),
+              F(0, 440, 110),
+              pit,
+              F(160, 440, 40),
+              SL(C(210, 400, 50, "land", R(10, 22))),
+              SL(C(330, 350, 50, "delay", R(35, 60))),
+              SL(C(450, 300, 50, "safe", 0)),
+              SL(C(570, 350, 50, "take", 0)),
+              F(640, 330, 320),
+              S(700, 60, 60, "prox", { d: R(20, 35), max: 180 }),
+              D("d", 780, 330, { hold: R(60, 90) }),
+            ];
+          },
         },
         {
           name: "PILLARS",
@@ -1083,35 +1158,41 @@
             case "C":
               if (o.st === 3) break;
               {
-                const j = o.ad > 0 ? (tick % 4 < 2 ? 1.5 : -1.5) : 0;
+                const j = o.ad > 0 && o.m !== "pit" ? (tick % 4 < 2 ? 1.5 : -1.5) : 0;
+                const px = o.x + o.mo;
                 g.fillStyle = l.fl;
-                const x = o.st === 4 ? o.x + o.w / 2 : o.x,
+                const x = o.st === 4 ? o.x + o.w / 2 : px,
                   w = o.st === 4 ? o.w / 2 : o.w;
-                g.fillRect(x + j, o.sy, w, 16);
+                g.fillRect(x + j, o.sy, w, o.m === "pit" ? H - o.sy : 16);
                 g.fillStyle = "rgba(255,255,255,.2)";
                 g.fillRect(x + j, o.sy, w, 3);
                 if (o.m === "safe") {
                   g.strokeStyle = "rgba(0,0,0,.5)";
                   g.beginPath();
-                  g.moveTo(o.x + 12, o.sy);
-                  g.lineTo(o.x + 20, o.sy + 16);
-                  g.moveTo(o.x + 34, o.sy);
-                  g.lineTo(o.x + 28, o.sy + 16);
+                  g.moveTo(px + 12, o.sy);
+                  g.lineTo(px + 20, o.sy + 16);
+                  g.moveTo(px + 34, o.sy);
+                  g.lineTo(px + 28, o.sy + 16);
                   g.stroke();
                 }
               }
               break;
             case "G":
-              g.fillStyle = "#111";
-              g.fillRect(o.x + (o.ad > 0 && tick % 4 < 2 ? 1 : 0), o.y, o.w, 2);
+              if (o.ad > 0) {
+                // only a brief tremble once armed; idle spike spots are invisible
+                g.fillStyle = "#111";
+                g.fillRect(o.x + (tick % 4 < 2 ? 1 : 0), o.y, o.w, 2);
+              }
               if (o.h > 0) {
                 g.fillStyle = "#e22";
                 spikes(o.x, o.y, o.w, o.h, -1);
               }
               break;
             case "S":
-              g.fillStyle = "#111";
-              g.fillRect(o.x, o.y, o.w, o.ad > 0 && tick % 4 < 2 ? 4 : 2);
+              if (o.ad > 0) {
+                g.fillStyle = "#111";
+                g.fillRect(o.x, o.y, o.w, tick % 4 < 2 ? 4 : 2);
+              }
               if (o.len > 0) {
                 g.fillStyle = "#777";
                 g.fillRect(o.x + o.w / 2 - 3, o.y, 6, o.len);
