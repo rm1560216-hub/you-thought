@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
-<title>IMPOSSIBLE: The Rage Protocol</title>
+<title>You Thought </title>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#07090f">
 <meta name="mobile-web-app-capable" content="yes">
@@ -295,7 +295,7 @@ const Game = (() => {
     g.fillStyle = '#889'; g.fillText('Locally recorded, not server-verified. [M] mute', 16, 530);
     const b = Audit.banner(); if (b) { g.fillStyle = '#fc4'; g.fillText(b, 16, 48); }
     g.textAlign = 'center'; g.fillStyle = '#fff'; g.font = '32px monospace';
-    if (state === 'title') { g.fillText('IMPOSSIBLE: THE RAGE PROTOCOL', 480, 220); g.font = '18px monospace'; g.fillText('Press Enter / tap to start', 480, 270); }
+    if (state === 'title') { g.fillText('You Thought ', 480, 220); g.font = '18px monospace'; g.fillText('Press Enter / tap to start', 480, 270); }
     if (state === 'dead') { g.fillText('YOU DIED', 480, 220); g.font = '22px monospace'; g.fillText('Respawn in ' + Math.ceil(deadTicks / 60) + 's', 480, 265); g.fillText(taunt, 480, 305); }
     if (state === 'complete') { g.fillText('LEVEL COMPLETE', 480, 240); g.font = '18px monospace'; g.fillText('Enter / tap to continue', 480, 280); }
     if (state === 'victory') { g.fillText('PROTOCOL DEFEATED', 480, 230); g.font = '18px monospace'; g.fillText('Deaths ' + deaths + '  Time ' + fmt(totalTicks) + '  (locally recorded)', 480, 270); }
