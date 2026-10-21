@@ -404,6 +404,10 @@
           rg: 100,
           d: 20,
           dx: 0,
+          ph: 0,
+          amp: 30,
+          dir: 1,
+          hold: 90,
           ...o,
         });
       const D = (id, x, y, o) =>
@@ -447,8 +451,10 @@
       const U = {
         C(o) {
           if (o.st === 0) {
-            if (pl.stand === o && o.m !== "safe" && o.m !== "take") trig(o, o.d);
+            if (pl.stand === o && o.m !== "safe" && o.m !== "take" && o.m !== "solid") trig(o, o.d);
             if (o.m === "take" && pl.j && pl.ls === o) trig(o, 3);
+            // Stair-slam: this higher panel slides over the lower one you stand on, drops, and crushes you.
+            if (o.m === "slam" && byId[o.tgt] && pl.stand === byId[o.tgt]) trig(o, o.d);
             // Surprise pit: opens a few steps before the edge, with no warning shake.
             if (o.m === "pit" && pl.stand && pl.x + 7 > o.x - o.lead)
               trig(o, 2 + ((nextRand(o) * 4) | 0));
@@ -483,6 +489,12 @@
               }
             }
             if (pl.stand === o) pl.x += o.mo - prev; // panel carries the player
+            if (o.ms === 0 && pl.stand !== o && nextRand(o) < 0.006) {
+              // drifts at random even if you never jump
+              o.ms = 1;
+              o.dir = nextRand(o) < 0.5 ? -1 : 1;
+              o.dist = 30 + nextRand(o) * 15;
+            }
           }
           if (o.ad > 0 && --o.ad === 0) {
             colTick = tick;
@@ -492,6 +504,8 @@
               o.sx = o.x + o.w / 2;
               o.sw = o.w / 2;
               o.st = 4;
+            } else if (o.m === "slam") {
+              o.st = 6;
             } else if (o.m === "pit") {
               o.sw = 0;
               o.st = 3;
@@ -516,7 +530,45 @@
             o.sw = o.w;
             o.sx = o.x;
           }
+          if (o.m === "slam" && o.st >= 6) {
+            const a = byId[o.tgt],
+              pm = o.mo;
+            if (o.st === 6) {
+              const tx = a.x + a.mo - o.x;
+              o.mo += Math.max(-6, Math.min(6, tx - o.mo));
+              if (Math.abs(tx - o.mo) < 1.5) {
+                o.st = 7;
+                o.vy = 0;
+              }
+            } else if (o.st === 7) {
+              o.vy += 1.2;
+              o.sy += o.vy;
+              if (o.sy >= a.sy - 16) {
+                o.sy = a.sy - 16;
+                o.st = 8;
+                o.t2 = 45;
+                Snd.sfx(100, 0.15);
+              }
+            } else if (o.st === 8) {
+              if (--o.t2 <= 0) o.st = 9;
+            } else if (o.sy > o.y) {
+              o.sy = Math.max(o.y, o.sy - 3);
+            } else {
+              o.mo -= Math.sign(o.mo) * Math.min(4, Math.abs(o.mo));
+              if (Math.abs(o.mo) < 0.5) {
+                o.mo = 0;
+                o.st = 0;
+                o.cd = 150;
+              }
+            }
+            if (pl.stand === o) pl.x += o.mo - pm; // riders are carried
+          }
+          if (o.m === "slam" && o.st === 0 && o.cd > 0) o.cd--;
           if (o.st !== 4) o.sx = o.x + o.mo;
+          o.lx = o.sx;
+          o.ly = o.sy;
+          o.lw = o.m === "slam" && (o.st === 7 || o.st === 8) ? o.w : 0; // deadly while falling and resting on the lower panel
+          o.lh = 16;
         },
         G(o) {
           if (o.st === 0) {
@@ -524,12 +576,16 @@
             else if (o.m === "jump" && pl.j && near(o) < o.rad) trig(o, o.d);
             else if (o.m === "timer" && --o.tm <= 0) {
               o.tm = o.per;
-              trig(o, 18);
+              trig(o, 6);
             }
           }
           if (o.ad > 0 && --o.ad === 0) {
-            o.st = 1;
-            Snd.sfx(700, 0.05);
+            if (o.fake)
+              o.cd = 120; // false alarm: twitches, never fires
+            else {
+              o.st = 1;
+              Snd.sfx(700, 0.05);
+            }
           }
           if (o.st === 1) {
             o.h += 3;
@@ -559,12 +615,17 @@
             else if (o.m === "jump" && pl.j && near(o) < o.rad + 40) trig(o, o.d);
             else if (o.m === "timer" && --o.tm <= 0) {
               o.tm = o.per;
-              trig(o, 20);
+              trig(o, 6);
             }
           }
           if (o.ad > 0 && --o.ad === 0) o.st = 1;
           if (o.st === 1) {
             o.len += o.sp;
+            if (o.pz && !o.pdone && o.len >= o.max * o.pz) {
+              o.pdone = 1;
+              o.st = 5;
+              o.t3 = o.pzt;
+            }
             if (o.len >= o.max) {
               o.len = o.max;
               o.st = 2;
@@ -572,18 +633,20 @@
             }
           } else if (o.st === 2 && --o.t2 <= 0) o.st = 3;
           else if (o.st === 3) {
-            o.len -= 1.5;
+            o.len -= 5;
             if (o.len <= 0) {
               o.len = 0;
+              o.pdone = 0;
               o.st = 0;
               o.cd = 90;
             }
           }
+          if (o.st === 5 && --o.t3 <= 0) o.st = 1; // pause over: resume descending
           if (o.cd > 0 && o.st === 0) o.cd--;
           o.lx = o.x;
-          o.ly = o.y;
-          o.lw = o.len > 6 ? o.w : 0;
-          o.lh = o.len;
+          o.ly = o.y + o.len - 14;
+          o.lw = o.len > 14 ? o.w : 0;
+          o.lh = 14;
         },
         P(o) {
           if (o.st === 0 && pl.stand && pl.x + 7 > o.x - 110 && pl.x < o.x) trig(o, o.d);
@@ -652,7 +715,7 @@
               o.sx = o.x;
             } else if (o.st === 1) {
               o.tm++;
-              if (o.tm > 30 && !ovr(pl.x - 4, pl.y, 22, 26, o.x, o.sy, o.w, o.h)) {
+              if (o.tm > 14 && !ovr(pl.x - 4, pl.y, 22, 26, o.x, o.sy, o.w, o.h)) {
                 o.st = 2;
                 o.sw = o.w;
                 Snd.sfx(110, 0.15);
@@ -672,18 +735,32 @@
             if (o.ad > 0 && --o.ad === 0) o.st = 1;
             if (o.st === 1) {
               o.tm++;
-              if (o.tm > 25 && !ovr(pl.x - 4, pl.y, 22, 26, o.x, o.sy, o.w, o.h)) {
+              if (o.tm > 12 && !ovr(pl.x - 4, pl.y, 22, 26, o.x, o.sy, o.w, o.h)) {
                 o.st = 2;
                 o.sw = o.w;
+                o.t2 = o.hold;
                 Snd.sfx(110, 0.15);
               }
             }
+          }
+          if (o.m === "conv") {
+            o.ph += o.v;
+            o.sx = o.x + o.dir * o.amp * (0.5 + 0.5 * Math.sin(o.ph));
+          }
+          if (o.m === "appear" && o.st === 2 && --o.t2 <= 0) {
+            o.st = 3;
+            o.sw = 0;
           }
           o.dx = o.sx - ox;
           if (o.sw && o.dx && ovr(pl.x, pl.y, 14, 26, o.sx, o.sy, o.sw, o.sh)) pushOut(o);
         },
         D(o) {
           if (o.dead) return;
+          if (o.real && o.st === 0 && o.jr > 0 && pl.j && pl.x < o.x && o.x - pl.x < 260) {
+            o.jr--;
+            o.st = 1;
+            Snd.sfx(220, 0.1);
+          }
           if (o.real) {
             if (o.st === 0 && o.n > 0 && pl.x < o.x && o.x - pl.x < 120 && pl.stand) {
               o.n--;
@@ -737,6 +814,7 @@
           fl: "#c98a52",
           ce: 60,
           mk: (R) => {
+            const J = (v, a) => v + (R(-a, a) | 0);
             const SL = (o) => {
               o.sl = 1;
               o.rs = R(1, 1e9) | 0;
@@ -745,12 +823,12 @@
             return [
               K(300, 500, 490),
               F(0, 440, 300),
-              SL(C(360, 400, 50, "land", R(10, 22))),
-              SL(C(480, 350, 50, "delay", R(35, 60))),
-              SL(C(600, 300, 50, "safe", 0)),
-              SL(C(720, 350, 50, "take", 0)),
+              SL(C(J(360, 18), J(400, 16), 50, "land", R(4, 10) | 0)),
+              SL(C(J(480, 18), J(350, 16), 50, "delay", R(8, 20) | 0)),
+              SL(C(J(600, 18), J(300, 16), 50, "safe", 0)),
+              SL(C(J(720, 18), J(350, 16), 50, "take", 0)),
               F(790, 330, 170),
-              D("d", 830, 330, { hold: R(60, 90) }),
+              D("d", 830, 330, { hold: R(60, 90) | 0 }),
             ];
           },
         },
@@ -808,22 +886,111 @@
             const a = R(60, 120),
               b = R(150, 190);
             return [
-              F(0, 440, 180),
-              Pf(180, 440, 130, { d: R(10, 20), link: "s1", at: 70, ld: R(0, 10) }),
-              S(190, 60, 120, "link", { sp: 4, max: 300, id: "s1" }),
-              F(310, 440, 130),
-              C(440, 440, 120, "part", R(20, 30)),
-              C(560, 440, 100, "delay", R(40, 55)),
-              F(660, 440, 300),
-              G(690, 440, 50, "timer", { tm: a, per: b, dur: 50 }),
-              S(690, 60, 60, "timer", { tm: a, per: b, sp: 5, max: 300, dur: 50 }),
-              Wl(770, 340, 16, 100, "false", { rg: 100, link: "g2" }),
-              G(790, 440, 50, "link", { id: "g2", dur: 60 }),
-              D("d", 840, 440, { n: 2, hold: R(60, 100) }),
+              F(0, 440, 260),
+              Pf(260, 440, 130, { d: R(3, 10), link: "s1", at: 70, ld: R(0, 10) }),
+              S(270, 60, 120, "link", { sp: 4, max: 380, id: "s1" }),
+              F(390, 440, 130),
+              C(520, 440, 120, "part", R(20, 30)),
+              C(640, 440, 100, "delay", R(40, 55)),
+              F(740, 440, 220),
+              Wl(850, 340, 16, 100, "false", { rg: 100, link: "g2" }),
+              G(870, 440, 50, "link", { id: "g2", dur: 60 }),
+              D("d", 880, 440, { n: 2, hold: R(60, 100) }),
             ];
           },
         },
       ];
+      LV.push(
+        {
+          name: "FALSE FLOOR",
+          bg: "#e7f5d8",
+          wl: "#5b8c4a",
+          fl: "#3a5a2e",
+          ce: 80,
+          mk: (R) => [
+            F(0, 440, 260),
+            C(260, 440, 70, "chain", R(20, 26) | 0, "c2", "c1"),
+            C(330, 440, 70, "chain", R(20, 26) | 0, "c3", "c2"),
+            C(400, 440, 70, "delay", R(20, 30) | 0, null, "c3"),
+            F(470, 440, 490),
+            B(520, 220, 330),
+            D("d", 800, 440, { n: 1, jr: 1, hold: R(60, 100) | 0 }),
+          ],
+        },
+        {
+          name: "UPSTAIRS",
+          bg: "#f6e3e3",
+          wl: "#a85a5a",
+          fl: "#5a2d2d",
+          ce: 60,
+          mk: (R) => [
+            F(0, 440, 260),
+            F(260, 380, 150),
+            F(410, 320, 150),
+            F(560, 260, 170),
+            F(730, 320, 230),
+            D("d", 830, 320, { n: 1, jr: 1, hold: R(60, 100) | 0 }),
+          ],
+        },
+        {
+          name: "CATWALKS",
+          bg: "#10202e",
+          wl: "#2f5d7c",
+          fl: "#6fa8c8",
+          ce: 60,
+          mk: (R) => {
+            const J = (v, a) => v + (R(-a, a) | 0);
+            const SL = (o) => {
+              o.sl = 1;
+              o.rs = R(1, 1e9) | 0;
+              return o;
+            };
+            return [
+              K(150, 500, 640),
+              F(0, 440, 150),
+              SL(C(J(200, 14), J(410, 12), 56, "repeat", R(25, 40) | 0)),
+              SL(C(J(320, 14), J(370, 12), 56, "land", R(6, 14) | 0)),
+              SL(C(J(440, 14), J(330, 12), 56, "safe", 0)),
+              SL(C(J(560, 14), J(370, 12), 56, "delay", R(10, 25) | 0)),
+              SL(C(J(680, 14), J(410, 12), 56, "take", 0)),
+              F(790, 440, 170),
+              D("d", 840, 440, { n: 1, jr: 1, hold: R(60, 100) | 0 }),
+            ];
+          },
+        },
+        {
+          name: "BASEMENT",
+          bg: "#2b2b33",
+          wl: "#55556a",
+          fl: "#8a8aa8",
+          ce: 70,
+          mk: (R) => {
+            const J = (v, a) => v + (R(-a, a) | 0);
+            const up = (o) => ((o.opt = 1), (o.sl = 1), (o.rs = R(1, 1e9) | 0), o); // optional high route, ignored by the route check
+            return [
+              F(0, 440, 960),
+              up(C(J(300, 40), 380, 60, "land", R(10, 20) | 0)),
+              up(C(J(580, 40), 380, 60, "take", 0)),
+              G(290, 440, 50, "prox", { id: "u1", rad: 70, d: R(10, 20) | 0 }), // spikes hidden under platforms
+              G(570, 440, 50, "prox", { id: "u2", rad: 70, d: R(10, 20) | 0 }),
+              D("d", 800, 440, { n: 2, jr: 1, hold: R(60, 100) | 0 }),
+            ];
+          },
+        },
+        {
+          name: "THE RAGE PROTOCOL",
+          bg: "#1a0d0d",
+          wl: "#6b1f1f",
+          fl: "#c9b8b8",
+          ce: 60,
+          mk: (R) => [
+            F(0, 440, 960),
+            D("d", 860, 440, { n: 3, jr: 1, hold: R(50, 80) | 0 }),
+            D("f", 640, 440, { real: 0, link: "sx" }),
+            S(630, 60, 60, "link", { sp: 9, max: 380, id: "sx" }),
+          ],
+        },
+      );
       // Rebuilt on EVERY load/retry from the seeded RNG: hand-placed hazards are stripped
       // (linked "signature" ones keep their ids) and new ones are scattered with spacing,
       // so no trap sits in the same place twice. Spawn and door zones are always kept clear.
@@ -832,15 +999,60 @@
           const o = objs[k];
           if ((o.t === "G" || o.t === "S" || o.t === "W") && !o.id && !o.link) objs.splice(k, 1);
         }
+        // Existing gaps (pillars, ledge before a pit): the edge may cave in as you run up, and/or right after you land.
+        const sup0 = objs
+          .filter((o) => (o.t === "F" || o.t === "C") && !o.opt)
+          .sort((a, b) => a.x - b.x);
+        const tileOf = (x, y, w, mode, d) => {
+          const t = C(x, y, w, mode, d);
+          t.tall = 1;
+          t.rs = R(1, 1e9) | 0;
+          return t;
+        };
+        for (let k = 1; k < sup0.length; k++) {
+          const a = sup0[k - 1],
+            b = sup0[k],
+            gap = b.x - (a.x + a.w);
+          if (gap < 40 || gap > 96) continue;
+          if (a.t === "F" && a.w >= 50 && objs.indexOf(a) >= 0 && R(0, 1) < 0.5) {
+            const tw = Math.min(40, a.w - 12);
+            objs.splice(
+              objs.indexOf(a),
+              1,
+              F(a.x, a.y, a.w - tw),
+              tileOf(a.x + a.w - tw, a.y, tw, "delay", R(5, 10) | 0),
+            );
+          }
+          if (b.t === "F" && b.w >= 50 && objs.indexOf(b) >= 0 && R(0, 1) < 0.5) {
+            const tw = Math.min(40, b.w - 12),
+              rest = F(b.x + tw, b.y, b.w - tw);
+            objs.splice(objs.indexOf(b), 1, tileOf(b.x, b.y, tw, "land", R(15, 24) | 0), rest);
+            sup0[k] = rest; // keep later pairs pointing at an object that is really in the list
+          }
+        }
+        // Floating panels (any level): a higher panel may be armed to slide over the lower one and crush it.
+        const fp = objs.filter((o) => o.t === "C" && o.sl && !o.tall).sort((a, b) => a.x - b.x);
+        const pairs = [];
+        for (let k = 1; k < fp.length; k++) if (fp[k].y <= fp[k - 1].y) pairs.push(k);
+        if (pairs.length && R(0, 1) < 0.75) {
+          const k = pairs[Math.floor(R(0, pairs.length))];
+          if (!fp[k - 1].id) fp[k - 1].id = "q" + Math.round(fp[k - 1].x);
+          fp[k - 1].m = "solid"; // the panel being crushed must stay put
+          fp[k].m = "slam";
+          fp[k].tgt = fp[k - 1].id;
+          fp[k].d = R(26, 46) | 0;
+        }
         const door = objs.find((o) => o.t === "D" && o.real);
         const lim = door.hx - 70,
           taken = [],
           pits = [];
+        objs.filter((o) => o.t === "D" && !o.real).forEach((o) => taken.push(o.x));
         const pick = (a) => a[Math.floor(R(0, a.length))];
         const free = (x) => taken.every((t) => Math.abs(t - x) >= 130);
         const supportAt = (x) =>
           objs.find(
-            (o) => (o.t === "F" || o.t === "C" || o.t === "P") && x >= o.x && x < o.x + o.w,
+            (o) =>
+              (o.t === "F" || o.t === "C" || o.t === "P") && !o.opt && x >= o.x && x < o.x + o.w,
           );
         const floorAt = (x) => {
           const s = supportAt(x);
@@ -869,7 +1081,7 @@
             tile.lead = 20 + (R(0, 40) | 0);
             pits.push(tile);
           } else {
-            tile = C(px, sp.y, w0, pick(["delay", "land", "take", "repeat"]), R(20, 45) | 0);
+            tile = C(px, sp.y, w0, pick(["delay", "land", "take", "repeat"]), R(8, 22) | 0);
           }
           tile.tall = 1;
           tile.rs = R(1, 1e9) | 0;
@@ -883,7 +1095,7 @@
           taken.push(px + w0 / 2);
           return true;
         }
-        function ground() {
+        function ground(fake) {
           const spans = objs.filter(
             (o) =>
               o.t === "F" && o.w >= 150 && Math.max(o.x + 30, 130) < Math.min(o.x + o.w - 74, lim),
@@ -894,12 +1106,13 @@
           if (!free(x + 22)) return false;
           objs.push(
             G(x, sp.y, 44, pick(["prox", "jump", "timer"]), {
-              d: R(14, 26) | 0,
+              d: R(3, 8) | 0,
               tm: R(40, 140) | 0,
               per: R(120, 200) | 0,
               dur: R(40, 70) | 0,
             }),
           );
+          if (fake) objs[objs.length - 1].fake = 1;
           taken.push(x + 22);
           return true;
         }
@@ -909,16 +1122,20 @@
           const top = ceilAt(x),
             fy = floorAt(x),
             low = fy - top < 150,
-            max = low ? fy - top - 18 : fy - top - 100;
+            mode = low ? "timer" : pick(["prox", "jump", "timer"]),
+            // reaches the floor, except jump-triggered ones which only reach the jump arc
+            max = low ? fy - top - 18 : fy - top;
           if (max < 40) return false;
           objs.push(
-            S(x, top, 60, low ? "timer" : pick(["prox", "jump", "timer"]), {
-              d: R(15, 30) | 0,
+            S(x, top, 60, mode, {
+              d: R(2, 8) | 0,
               max,
-              sp: low ? 2.2 : R(4, 7),
+              sp: low ? 4 : R(12, 18),
+              pz: !low && R(0, 1) < 0.4 ? R(0.4, 0.6) : 0,
+              pzt: R(25, 50) | 0,
               tm: R(30, 100) | 0,
               per: R(150, 220) | 0,
-              dur: R(40, 70) | 0,
+              dur: R(30, 50) | 0,
             }),
           );
           taken.push(x + 30);
@@ -934,33 +1151,149 @@
             minx: sp.x + 4,
             v: R(1.6, 2.2),
             dist: R(150, 210),
-            dl: R(5, 40) | 0,
+            dl: R(0, 20) | 0,
           });
           w.sw = 0;
           objs.push(w);
           return true;
         }
-        const pool = ["G", "S", "pit", "pit"];
+        // Two walls that close together then reopen: only walkable while the gap is open.
+        function converge() {
+          const spans = objs.filter(
+            (o) =>
+              o.t === "F" &&
+              o.w >= 150 &&
+              Math.max(o.x + 30, 130) < Math.min(o.x + o.w - 130, lim - 128),
+          );
+          if (!spans.length) return false;
+          const sp = pick(spans);
+          const x = R(Math.max(sp.x + 30, 130), Math.min(sp.x + sp.w - 130, lim - 128)) | 0;
+          if (!free(x + 60)) return false;
+          const ph = R(-1.57, 0),
+            v = R(0.05, 0.08);
+          objs.push(Wl(x, sp.y - 100, 18, 100, "conv", { ph, v, amp: 30, dir: 1 }));
+          objs.push(Wl(x + 110, sp.y - 100, 18, 100, "conv", { ph, v, amp: 30, dir: -1 }));
+          taken.push(x + 60);
+          return true;
+        }
+        // Wall that pops up ahead after a random delay, blocks briefly, then vanishes.
+        function appearWall() {
+          const spans = objs.filter(
+            (o) =>
+              o.t === "F" && o.w >= 150 && Math.max(o.x + 30, 130) < Math.min(o.x + o.w - 30, lim),
+          );
+          if (!spans.length) return false;
+          const sp = pick(spans);
+          const x = R(Math.max(sp.x + 30, 130), Math.min(sp.x + sp.w - 30, lim)) | 0;
+          if (!free(x + 9)) return false;
+          const w = Wl(x, sp.y - 100, 18, 100, "appear", {
+            tx: Math.max(60, x - R(120, 200)),
+            d: R(0, 15) | 0,
+            hold: R(60, 120) | 0,
+          });
+          w.sw = 0;
+          objs.push(w);
+          taken.push(x + 9);
+          return true;
+        }
+        // Pit that fills at a random speed while a linked ceiling spike drops at a random moment.
+        function fill() {
+          const w0 = 100 + (R(0, 30) | 0);
+          const spans = objs.filter(
+            (o) =>
+              o.t === "F" &&
+              o.w >= w0 + 220 &&
+              Math.max(o.x + 100, 130) < Math.min(o.x + o.w - w0 - 80, lim - w0),
+          );
+          if (!spans.length) return false;
+          const sp = pick(spans);
+          const px = R(Math.max(sp.x + 100, 130), Math.min(sp.x + sp.w - w0 - 80, lim - w0)) | 0;
+          if (!free(px + w0 / 2)) return false;
+          const id = "sf" + px,
+            top = ceilAt(px),
+            reach = sp.y - top;
+          if (reach < 40) return false;
+          const p = Pf(px, sp.y, w0, {
+            d: R(3, 10) | 0,
+            sp: R(1.5, 4),
+            at: R(10, 70) | 0,
+            ld: R(0, 12) | 0,
+            link: id,
+          });
+          objs.splice(
+            objs.indexOf(sp),
+            1,
+            F(sp.x, sp.y, px - sp.x),
+            p,
+            F(px + w0, sp.y, sp.x + sp.w - px - w0),
+            S(px, top, w0, "link", { sp: R(9, 13), max: reach, dur: R(40, 60) | 0, id }),
+          );
+          taken.push(px + w0 / 2);
+          return true;
+        }
+        // Carved cave-pit: visible gap whose edge caves in as you run up to jump and/or right after you land.
+        function cave() {
+          const w0 = 50 + (R(0, 10) | 0);
+          const lo = (o) => Math.max(o.x + 80, 110),
+            hi = (o) => Math.min(o.x + o.w - w0 - 80, lim - w0 - 40);
+          const spans = objs.filter((o) => o.t === "F" && o.w >= 200 && lo(o) <= hi(o));
+          if (!spans.length) return false;
+          const sp = pick(spans),
+            px = R(lo(sp), hi(sp)) | 0;
+          if (!free(px + w0 / 2)) return false;
+          const v = Math.floor(R(0, 3));
+          const left =
+            v !== 1 ? tileOf(px - 40, sp.y, 40, "delay", R(5, 10) | 0) : F(px - 40, sp.y, 40);
+          const right =
+            v !== 0 ? tileOf(px + w0, sp.y, 40, "land", R(15, 24) | 0) : F(px + w0, sp.y, 40);
+          objs.splice(
+            objs.indexOf(sp),
+            1,
+            F(sp.x, sp.y, px - 40 - sp.x),
+            left,
+            right,
+            F(px + w0 + 40, sp.y, sp.x + sp.w - px - w0 - 40),
+          );
+          taken.push(px + w0 / 2);
+          return true;
+        }
+        const pool = ["G", "S", "pit", "pit", "cave", "cave", "decoy"];
         if (i >= 1) pool.push("tile");
         if (i >= 2) pool.push("wall");
-        const n = Math.min(5, 2 + (i >> 1));
+        if (i >= 3) pool.push("conv");
+        if (i >= 4) pool.push("appear");
+        if (i >= 5) pool.push("fill");
+        const calm = R(0, 1) < 0.2; // some tries are suspiciously quiet: false hope
+        const n = calm ? 1 : Math.min(5, 2 + (i >> 1));
+        const has = (m) => objs.some((o) => o.m === m);
         let placed = 0;
         for (let t = 0; t < 40 && placed < n; t++) {
           const k = pick(pool);
+          if (k === "decoy" || k === "cave") {
+            if (k === "decoy" ? ground(true) : cave()) placed++;
+            continue;
+          }
+          // surge / appearing / converging walls never share a layout, so walls can't squeeze you between two traps
           const ok =
             k === "G"
               ? ground()
               : k === "S"
                 ? ceiling()
                 : k === "wall"
-                  ? !objs.some((o) => o.m === "surge") && wall()
-                  : split(k);
+                  ? !has("surge") && !has("appear") && !has("conv") && wall()
+                  : k === "conv"
+                    ? !has("surge") && !has("appear") && !has("conv") && converge()
+                    : k === "appear"
+                      ? !has("surge") && !has("appear") && !has("conv") && appearWall()
+                      : k === "fill"
+                        ? fill()
+                        : split(k);
           if (ok) placed++;
         }
       }
       function validate(objs) {
         const sup = objs
-          .filter((o) => o.t === "F" || o.t === "C" || o.t === "P")
+          .filter((o) => (o.t === "F" || o.t === "C" || o.t === "P") && !o.opt)
           .sort((a, b) => a.x - b.x);
         for (let i = 1; i < sup.length; i++) {
           const c = sup[i - 1],
@@ -1058,8 +1391,11 @@
           done = false;
           const r = RNG.make(runSeed ^ (i * 7919) ^ (att * 104729)),
             R = (a, b) => a + r() * (b - a);
-          objs = L().mk(R);
-          randomize(objs, R, i, L());
+          for (let t = 0; t < 20; t++) {
+            objs = L().mk(R);
+            randomize(objs, R, i, L());
+            if (!validate(objs)) break;
+          }
           byId = {};
           for (const o of objs) if (o.id) byId[o.id] = o;
           const e = validate(objs);
