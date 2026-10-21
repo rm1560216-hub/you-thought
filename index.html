@@ -454,8 +454,36 @@
         },
         tick = 0,
         colTick = -999;
-      function trig(o, d) {
-        if (o && o.st === 0 && o.ad === 0 && !(o.cd > 0)) o.ad = Math.max(1, d | 0);
+      // One-trap-at-a-time rule: a trap may only start on its own while no other trap is active.
+      // Linked/chained traps (force) are part of the same trap. A moving door counts as a trap.
+      function busy(self) {
+        for (let i = 0; i < objs.length; i++) {
+          const o = objs[i];
+          if (o === self) continue;
+          if (o.t === "G" || o.t === "S") {
+            if (o.st !== 0 || o.ad > 0) return true;
+          } else if (o.t === "C") {
+            if (o.ad > 0 || o.st === 2 || o.st >= 6 || o.ms > 0) return true;
+          } else if (o.t === "W") {
+            if (
+              o.m === "surge"
+                ? o.st >= 1 && o.st <= 3
+                : o.m === "appear"
+                  ? o.st === 1 || o.st === 2
+                  : o.m === "false" && o.st === 1
+            )
+              return true;
+          } else if (o.t === "P") {
+            if (o.st === 1) return true;
+          } else if (o.t === "D") {
+            if (o.real && o.st !== 0) return true;
+          }
+        }
+        return false;
+      }
+      function trig(o, d, force) {
+        if (o && o.st === 0 && o.ad === 0 && !(o.cd > 0) && (force || !busy(o)))
+          o.ad = Math.max(1, d | 0);
       }
       const ovr = (a, b, c, d, e, f, g_, h) => a < e + g_ && a + c > e && b < f + h && b + d > f;
       function pushOut(o) {
@@ -487,17 +515,19 @@
             const prev = o.mo;
             if (o.ms === 0) {
               if (
-                pl.j &&
-                pl.stand !== o &&
-                Math.abs(pl.x + 7 - (o.x + o.mo + o.w / 2)) < 170 &&
-                nextRand(o) < 0.6
+                !pl.stand &&
+                pl.air > 6 &&
+                pl.air < 30 &&
+                Math.abs(pl.x + 7 - (o.x + o.mo + o.w / 2)) < 150 &&
+                nextRand(o) < 0.07 &&
+                !busy(o)
               ) {
                 o.ms = 1;
                 o.dir = nextRand(o) < 0.5 ? -1 : 1;
                 o.dist = 30 + nextRand(o) * 15;
               }
             } else if (o.ms === 1) {
-              o.mo += o.dir * 2.2;
+              o.mo += o.dir * 12; // abrupt
               if (Math.abs(o.mo) >= o.dist) {
                 o.ms = 2;
                 o.tm = (45 + nextRand(o) * 25) | 0;
@@ -505,14 +535,14 @@
             } else if (o.ms === 2) {
               if (--o.tm <= 0) o.ms = 3;
             } else {
-              o.mo -= Math.sign(o.mo) * 1.5;
-              if (Math.abs(o.mo) < 1.5) {
+              o.mo -= Math.sign(o.mo) * Math.min(3, Math.abs(o.mo));
+              if (Math.abs(o.mo) < 0.5) {
                 o.mo = 0;
                 o.ms = 0;
               }
             }
             if (pl.stand === o) pl.x += o.mo - prev; // panel carries the player
-            if (o.ms === 0 && pl.stand !== o && nextRand(o) < 0.006) {
+            if (o.ms === 0 && pl.stand !== o && nextRand(o) < 0.0015 && !busy(o)) {
               // drifts at random even if you never jump
               o.ms = 1;
               o.dir = nextRand(o) < 0.5 ? -1 : 1;
@@ -522,7 +552,7 @@
           if (o.ad > 0 && --o.ad === 0) {
             colTick = tick;
             Snd.sfx(150, 0.12);
-            if (o.link) trig(byId[o.link], 24);
+            if (o.link) trig(byId[o.link], 24, true);
             if (o.m === "part") {
               o.sx = o.x + o.w / 2;
               o.sw = o.w / 2;
@@ -678,7 +708,7 @@
             o.fy -= o.sp;
             if (o.link && !o.fired && o.y + 110 - o.fy >= o.at) {
               o.fired = 1;
-              trig(byId[o.link], o.ld);
+              trig(byId[o.link], o.ld, true);
             }
             if (o.fy <= o.y) {
               o.fy = o.y;
@@ -723,14 +753,14 @@
           } else if (o.m === "false") {
             if (o.st === 0 && pl.x > o.x - o.rg) {
               o.st = 1;
-              trig(byId[o.link], 10);
+              trig(byId[o.link], 10, true);
             }
             if (o.st === 1) {
               o.sy -= 3;
               if (o.sy <= o.y - o.h - 6) o.st = 2;
             }
           } else if (o.m === "surge") {
-            if (o.st === 0 && pl.stand && pl.x > o.tx) {
+            if (o.st === 0 && pl.stand && pl.x > o.tx && !busy(o)) {
               o.st = 1;
               o.tm = -(o.dl | 0);
               o.x = Math.max(o.minx, pl.x - 100);
@@ -779,13 +809,21 @@
         },
         D(o) {
           if (o.dead) return;
-          if (o.real && o.st === 0 && o.jr > 0 && pl.j && pl.x < o.x && o.x - pl.x < 260) {
+          if (
+            o.real &&
+            o.st === 0 &&
+            o.jr > 0 &&
+            pl.j &&
+            pl.x < o.x &&
+            o.x - pl.x < 260 &&
+            !busy(o)
+          ) {
             o.jr--;
             o.st = 1;
             Snd.sfx(220, 0.1);
           }
           if (o.real) {
-            if (o.st === 0 && o.n > 0 && pl.x < o.x && o.x - pl.x < 120 && pl.stand) {
+            if (o.st === 0 && o.n > 0 && pl.x < o.x && o.x - pl.x < 120 && pl.stand && !busy(o)) {
               o.n--;
               o.st = 1;
               Snd.sfx(220, 0.1);
@@ -814,7 +852,7 @@
             } else {
               o.dead = 1;
               o.sw = 0;
-              trig(byId[o.link], 4);
+              trig(byId[o.link], 4, true);
             }
           }
         },
@@ -832,9 +870,9 @@
         },
         {
           name: "FLOATING",
-          bg: "#2a1a14",
-          wl: "#a0623a",
-          fl: "#c98a52",
+          bg: "#cfe8ff",
+          wl: "#59708f",
+          fl: "#2b3a52",
           ce: 60,
           mk: (R) => {
             const J = (v, a) => v + (R(-a, a) | 0);
@@ -857,9 +895,9 @@
         },
         {
           name: "PILLARS",
-          bg: "#b9a7e6",
-          wl: "#6f5fb0",
-          fl: "#4a7a56",
+          bg: "#cfe8ff",
+          wl: "#59708f",
+          fl: "#2b3a52",
           ce: 70,
           mk: (R) => [
             F(0, 400, 120),
@@ -875,9 +913,9 @@
         },
         {
           name: "THE TUNNEL",
-          bg: "#f2c58a",
-          wl: "#d98a2e",
-          fl: "#7a3f12",
+          bg: "#cfe8ff",
+          wl: "#59708f",
+          fl: "#2b3a52",
           ce: 100,
           mk: (R) => [
             F(0, 440, 560),
@@ -901,9 +939,9 @@
         },
         {
           name: "NOT AGAIN",
-          bg: "#1a1d2b",
-          wl: "#3b4262",
-          fl: "#8b93b8",
+          bg: "#cfe8ff",
+          wl: "#59708f",
+          fl: "#2b3a52",
           ce: 60,
           mk: (R) => {
             const a = R(60, 120),
@@ -926,9 +964,9 @@
       LV.push(
         {
           name: "FALSE FLOOR",
-          bg: "#e7f5d8",
-          wl: "#5b8c4a",
-          fl: "#3a5a2e",
+          bg: "#cfe8ff",
+          wl: "#59708f",
+          fl: "#2b3a52",
           ce: 80,
           mk: (R) => [
             F(0, 440, 260),
@@ -942,9 +980,9 @@
         },
         {
           name: "UPSTAIRS",
-          bg: "#f6e3e3",
-          wl: "#a85a5a",
-          fl: "#5a2d2d",
+          bg: "#cfe8ff",
+          wl: "#59708f",
+          fl: "#2b3a52",
           ce: 60,
           mk: (R) => [
             F(0, 440, 260),
@@ -957,9 +995,9 @@
         },
         {
           name: "CATWALKS",
-          bg: "#10202e",
-          wl: "#2f5d7c",
-          fl: "#6fa8c8",
+          bg: "#cfe8ff",
+          wl: "#59708f",
+          fl: "#2b3a52",
           ce: 60,
           mk: (R) => {
             const J = (v, a) => v + (R(-a, a) | 0);
@@ -983,9 +1021,9 @@
         },
         {
           name: "BASEMENT",
-          bg: "#2b2b33",
-          wl: "#55556a",
-          fl: "#8a8aa8",
+          bg: "#cfe8ff",
+          wl: "#59708f",
+          fl: "#2b3a52",
           ce: 70,
           mk: (R) => {
             const J = (v, a) => v + (R(-a, a) | 0);
@@ -1002,9 +1040,9 @@
         },
         {
           name: "THE RAGE PROTOCOL",
-          bg: "#1a0d0d",
-          wl: "#6b1f1f",
-          fl: "#c9b8b8",
+          bg: "#cfe8ff",
+          wl: "#59708f",
+          fl: "#2b3a52",
           ce: 60,
           mk: (R) => [
             F(0, 440, 960),
@@ -1283,7 +1321,6 @@
         const pool = ["G", "S", "pit", "pit", "cave", "cave", "decoy"];
         if (i >= 1) pool.push("tile");
         if (i >= 2) pool.push("wall");
-        if (i >= 3) pool.push("conv");
         if (i >= 4) pool.push("appear");
         if (i >= 5) pool.push("fill");
         const calm = R(0, 1) < 0.2; // some tries are suspiciously quiet: false hope
@@ -1373,12 +1410,7 @@
               $("b2").textContent = "Start over";
             }
           } else if (st === "prep") {
-            m.innerHTML =
-              "Level " +
-              (cur + 1) +
-              '<br><span style="font-size:.6em;font-weight:400">' +
-              L().name +
-              "</span>";
+            m.textContent = "Ready?";
             b1.textContent = "Start";
           } else if (st === "dead") {
             m.className = "big";
@@ -1415,8 +1447,8 @@
             };
             b1.textContent = "Resume";
           } else if (st === "complete") {
-            m.textContent = "Level complete";
-            b1.textContent = "Continue";
+            m.textContent = "You win.";
+            b1.textContent = "Again";
           } else if (st === "victory") {
             m.innerHTML =
               'You made it.<br><span style="font-size:.6em;font-weight:400">Deaths: ' +
@@ -1554,6 +1586,7 @@
               pl.lt = 6;
             }
           } else if (pl.c > 0) pl.c--;
+          pl.air = pl.stand ? 0 : (pl.air | 0) + 1; // ticks spent in the air
           pl.s = pl.stand
             ? pl.lt > 0
               ? "land"
@@ -1764,12 +1797,7 @@
           g.fillStyle = "#fff";
           g.font = "bold 16px system-ui";
           g.fillText(
-            "LEVEL " +
-              (cur + 1) +
-              "   DEATHS " +
-              Save.d.deaths +
-              "   SOUND " +
-              (Save.d.mute ? "OFF" : "ON"),
+            "DEATHS " + Save.d.deaths + "   SOUND " + (Save.d.mute ? "OFF" : "ON"),
             18,
             30,
           );

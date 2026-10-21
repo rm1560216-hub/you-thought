@@ -1,4 +1,4 @@
-const CACHE = "you-thought-v8"; // bump on every release
+const CACHE = "you-thought-v9"; // bump on every release
 const SHELL = [
   "./",
   "./index.html",
